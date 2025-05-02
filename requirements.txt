@@ -1,0 +1,6 @@
+streamlit
+streamlit-chat
+groq
+python-dotenv
+fpdf
+requests
