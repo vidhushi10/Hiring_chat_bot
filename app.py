@@ -109,30 +109,92 @@ def get_job_recommendations(position, location, remote=True):
             "remote": remote
         }
         try:
+            st.write(f"Searching for jobs: {keywords} in {location}")  # Debug info
             response = requests.post(f"{url}{jooble_api_key}", json=payload, headers=headers)
             if response.status_code == 200:
                 job_data = response.json()
-                jobs = job_data.get('jobs', []) or job_data.get('results', [])
+                if not job_data:
+                    st.write("Empty response from API")
+                    return []
+                
+                # Log structure to help debug
+                st.write(f"API response keys: {list(job_data.keys())}")
+                
+                # Try to get jobs from different possible response structures
+                jobs = []
+                if 'jobs' in job_data:
+                    jobs = job_data['jobs']
+                elif 'results' in job_data:
+                    jobs = job_data['results']
+                else:
+                    # Try to find an array in the response that might contain jobs
+                    for key, value in job_data.items():
+                        if isinstance(value, list) and len(value) > 0:
+                            jobs = value
+                            break
+                
+                st.write(f"Found {len(jobs)} jobs")
                 return jobs
             else:
+                st.write(f"API Error: Status code {response.status_code}")
                 return []
         except Exception as e:
+            st.write(f"Exception in job search: {str(e)}")
             return []
 
+    # First try with the specific position
     jobs = fetch_jobs(position)
 
+    # If no jobs found, try with broader terms
     if not jobs:
-        jobs = fetch_jobs("fresher OR graduate OR entry level")
+        st.write("Trying with broader search terms...")
+        jobs = fetch_jobs(f"{position} OR entry level OR graduate")
+
+    # If still no jobs, try very generic terms
+    if not jobs:
+        st.write("Trying with generic search terms...")
+        jobs = fetch_jobs("entry level")
 
     if not jobs:
-        return ["❗ No relevant jobs found even for freshers. Please try a broader location or position."]
+        return ["❗ No relevant jobs found. Please try a different location or position."]
+
+    # Add a debugging toggle in the sidebar
+    debug_mode = st.sidebar.checkbox("Debug Mode", value=False)
+    if debug_mode:
+        st.sidebar.json(jobs[0] if jobs else "No jobs found")
 
     formatted = []
     for job in jobs[:5]:
-        title = job.get('title', 'No title')
-        location = job.get('location', 'N/A')
-        link = job.get('link', '#')
-        formatted.append(f"🔹 **{title}**\n📍 {location}\n🔗 [Apply Here]({link})")
+        try:
+            title = job.get('title', 'No title')
+            company = job.get('company', job.get('companyName', 'Company not specified'))
+            location = job.get('location', 'Location not specified')
+            snippet = job.get('snippet', job.get('description', 'No description available'))
+            link = job.get('link', job.get('url', '#'))
+            salary = job.get('salary', 'Salary not specified')
+            
+            # Format the job snippet to keep it concise
+            if len(snippet) > 150:
+                snippet = snippet[:150] + "..."
+            
+            # Build a properly formatted job listing with more context
+            job_listing = (
+                f"🔹 **{title}**\n"
+                f"🏢 {company}\n"
+                f"📍 {location}\n"
+                f"💰 {salary}\n"
+                f"📝 {snippet}\n"
+                f"🔗 [Apply Here]({link})"
+            )
+            formatted.append(job_listing)
+        except Exception as e:
+            st.write(f"Error formatting job: {str(e)}")
+            continue
+    
+    # Handle case when we successfully got jobs but couldn't format them
+    if jobs and not formatted:
+        return ["⚠️ Jobs found but couldn't be displayed properly. Try again later."]
+        
     return formatted
 
 # PDF Export
