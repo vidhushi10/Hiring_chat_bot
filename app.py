@@ -13,11 +13,11 @@ from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
 # Load environment variables
-load_dotenv()
-groq_api_key = os.getenv("GROQ_API_KEY")
-jooble_api_key = os.getenv("JOOBLE_API_KEY")
-sender_email = os.getenv("SENDER_EMAIL")
-sender_password = os.getenv("SENDER_PASSWORD")
+groq_api_key = st.secrets["GROQ_API_KEY"]
+jooble_api_key = st.secrets["JOOBLE_API_KEY"]
+sender_email = st.secrets["SENDER_EMAIL"]
+sender_password = st.secrets["SENDER_PASSWORD"]
+
 
 # GROQ client setup
 client = Groq(api_key=groq_api_key)
