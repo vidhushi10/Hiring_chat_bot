@@ -13,11 +13,25 @@ from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
 # Load environment variables
-groq_api_key = st.secrets["GROQ_API_KEY"]
-jooble_api_key = st.secrets["JOOBLE_API_KEY"]
-sender_email = st.secrets["SENDER_EMAIL"]
-sender_password = st.secrets["SENDER_PASSWORD"]
+load_dotenv()  # Load variables from .env file if it exists
 
+# Try to load secrets from Streamlit's secrets management, fall back to environment variables
+def get_secret(key):
+    try:
+        return st.secrets[key]
+    except (KeyError, FileNotFoundError):
+        # Fall back to environment variables
+        return os.environ.get(key)
+
+groq_api_key = get_secret("GROQ_API_KEY")
+jooble_api_key = get_secret("JOOBLE_API_KEY")
+sender_email = get_secret("SENDER_EMAIL")
+sender_password = get_secret("SENDER_PASSWORD")
+
+# Verify that required keys are available
+if not groq_api_key:
+    st.error("GROQ API key is missing. Please set it in .streamlit/secrets.toml or as an environment variable.")
+    st.stop()
 
 # GROQ client setup
 client = Groq(api_key=groq_api_key)
