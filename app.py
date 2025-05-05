@@ -378,7 +378,58 @@ def export_pdf(candidate_info, tech_qs, code_qs, job_recs):
     pdf_buffer.seek(0)
     return pdf_buffer
 
-# Email sending
+# Unified email sending function with cloud compatibility and testing
+def send_email_safely(from_email, password, to_email, message_string, email_type="Email"):
+    # Test if we're in a test mode (no actual sending)
+    if st.session_state.get('test_mode', False):
+        st.session_state.test_results = st.session_state.get('test_results', [])
+        st.session_state.test_results.append({
+            "type": email_type,
+            "recipient": to_email,
+            "status": "simulated_success",
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        })
+        return True
+        
+    # Check for valid credentials before attempting
+    if not from_email or not password:
+        st.error(f"⚠️ Missing email credentials. Please check your configuration.")
+        return False
+        
+    try:
+        # Try with SSL first (most secure)
+        try:
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
+                server.login(from_email, password)
+                server.sendmail(from_email, to_email, message_string)
+            return True
+        except Exception as ssl_error:
+            # Log the SSL error but try TLS as fallback
+            print(f"SSL connection failed: {ssl_error}, trying TLS...")
+            
+            # Try with TLS as fallback (more compatible with some cloud providers)
+            with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as server:
+                server.starttls()
+                server.login(from_email, password)
+                server.sendmail(from_email, to_email, message_string)
+            return True
+            
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Email sending error: {error_msg}")
+        
+        # Handle common cloud-specific errors
+        if "timeout" in error_msg.lower():
+            st.error("⚠️ Email server connection timed out. This may be due to cloud environment restrictions.")
+        elif "authentication" in error_msg.lower() or "login" in error_msg.lower():
+            st.error("⚠️ Email authentication failed. Please check your credentials or try app-specific password.")
+        elif "blocked" in error_msg.lower() or "spam" in error_msg.lower():
+            st.error("⚠️ Email sending blocked. Cloud providers sometimes restrict SMTP connections.")
+        else:
+            st.error(f"⚠️ Failed to send email: {error_msg}")
+        return False
+
+# Email sending with cloud compatibility
 def send_email_with_pdf(recipient_email, pdf_buffer):
     message = MIMEMultipart()
     message["From"] = sender_email
@@ -392,14 +443,121 @@ def send_email_with_pdf(recipient_email, pdf_buffer):
     part['Content-Disposition'] = 'attachment; filename="HiringPartner_Candidate_Report.pdf"'
     message.attach(part)
 
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(sender_email, sender_password)
-            server.sendmail(sender_email, recipient_email, message.as_string())
-        return True
-    except Exception as e:
-        print(f"Error sending email: {e}")
-        return False
+    # Try to send email with enhanced error handling for cloud environments
+    return send_email_safely(sender_email, sender_password, recipient_email, message.as_string(), "PDF Report")
+
+# Format job recommendations as HTML for email
+def format_jobs_for_email(job_recommendations, candidate_name, position, location):
+    html_content = f"""
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+            h1 {{ color: #003366; }}
+            h2 {{ color: #0066cc; margin-top: 20px; }}
+            .job-item {{ border-left: 4px solid #0066cc; padding: 10px; margin: 15px 0; background-color: #f8f9fa; }}
+            .job-title {{ font-weight: bold; color: #0066cc; margin-bottom: 5px; }}
+            .company {{ font-weight: bold; }}
+            .location {{ color: #666; }}
+            .salary {{ color: #28a745; }}
+            .description {{ margin-top: 8px; }}
+            .apply-btn {{ background-color: #0066cc; color: white; padding: 8px 15px; text-decoration: none; display: inline-block; margin-top: 10px; border-radius: 4px; }}
+            .footer {{ margin-top: 30px; font-size: 12px; color: #666; border-top: 1px solid #eee; padding-top: 10px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Job Recommendations for {candidate_name}</h1>
+            <p>Here are the job opportunities we found matching your search for <strong>{position}</strong> in <strong>{location}</strong>:</p>
+    """
+    
+    for job_md in job_recommendations:
+        # Parse markdown job listing to extract components
+        try:
+            lines = job_md.split("\n")
+            title = lines[0].replace("🔹 **", "").replace("**", "")
+            company = lines[1].replace("🏢 ", "")
+            location_line = lines[2].replace("📍 ", "")
+            salary = lines[3].replace("💰 ", "")
+            description = lines[4].replace("📝 ", "")
+            
+            # Extract link - looking for [Apply Here](link)
+            link = ""
+            if len(lines) > 5 and "Apply Here" in lines[5]:
+                import re
+                link_match = re.search(r'\]\((.*?)\)', lines[5])
+                if link_match:
+                    link = link_match.group(1)
+            
+            html_content += f"""
+            <div class="job-item">
+                <div class="job-title">{title}</div>
+                <div class="company">{company}</div>
+                <div class="location">{location_line}</div>
+                <div class="salary">{salary}</div>
+                <div class="description">{description}</div>
+                <a href="{link}" class="apply-btn">Apply Now</a>
+            </div>
+            """
+        except:
+            # Fallback if parsing fails
+            html_content += f"""<div class="job-item">{job_md.replace("\n", "<br>")}</div>"""
+    
+    html_content += """
+            <div class="footer">
+                <p>This email was sent to you by Hiring Partner Assistant. The links provided direct to external job listing sites.</p>
+                <p>Best of luck with your job search!</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return html_content
+
+# Send job recommendations via email
+def send_jobs_email(recipient_email, recipient_name, job_recommendations, position, location):
+    message = MIMEMultipart("alternative")
+    message["From"] = sender_email
+    message["To"] = recipient_email
+    message["Subject"] = f"Job Recommendations for {position} in {location}"
+
+    # Create plain text version
+    text_content = f"Job Recommendations for {position} in {location}\n\n"
+    for job in job_recommendations:
+        text_content += job.replace("🔹 **", "").replace("**", "") + "\n\n"
+    text_content += "Visit our website for more recommendations."
+
+    # Create HTML version
+    html_content = format_jobs_for_email(job_recommendations, recipient_name, position, location)
+
+    # Attach parts
+    part1 = MIMEText(text_content, "plain")
+    part2 = MIMEText(html_content, "html")
+    message.attach(part1)
+    message.attach(part2)
+
+    # Try to send email with enhanced error handling for cloud environments
+    return send_email_safely(sender_email, sender_password, recipient_email, message.as_string(), "Job Listings")
+
+# Function to test email functionality automatically
+def test_email_functions():
+    st.session_state.test_mode = True
+    st.session_state.test_results = []
+    
+    # Test PDF email
+    test_buffer = BytesIO(b"Test PDF content")
+    pdf_result = send_email_with_pdf("test@example.com", test_buffer)
+    
+    # Test jobs email
+    mock_jobs = [
+        "🔹 **Test Job**\n🏢 Test Company\n📍 Test Location\n💰 Test Salary\n📝 Test Description\n🔗 [Apply Here](https://example.com)"
+    ]
+    jobs_result = send_jobs_email("test@example.com", "Test User", mock_jobs, "Test Position", "Test Location")
+    
+    # Return test status
+    st.session_state.test_mode = False
+    return all([pdf_result, jobs_result]), st.session_state.test_results
 
 # Chat logic
 def chat_logic(user_input):
@@ -498,20 +656,73 @@ else:
         for job in st.session_state.job_recommendations:
             st.markdown(job)
 
-        if st.button("📄 Export & Email Report"):
-            pdf_buffer = export_pdf(
-                st.session_state.candidate_info,
-                st.session_state.tech_questions or ["No technical questions generated."],
-                st.session_state.code_questions or ["No coding questions generated."],
-                st.session_state.job_recommendations or ["No job recommendations available."]
-            )
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("📄 Export & Email Full Report"):
+                with st.spinner("Preparing and sending report..."):
+                    pdf_buffer = export_pdf(
+                        st.session_state.candidate_info,
+                        st.session_state.tech_questions or ["No technical questions generated."],
+                        st.session_state.code_questions or ["No coding questions generated."],
+                        st.session_state.job_recommendations or ["No job recommendations available."]
+                    )
+                    
+                    recipient = st.session_state.candidate_info.get("Email")
+                    if recipient:
+                        email_sent = send_email_with_pdf(recipient, pdf_buffer)
+                        if email_sent:
+                            st.success(f"📧 Full report sent to {recipient}")
+                        else:
+                            st.error("❌ Failed to send email. Check logs or SMTP setup.")
+                            
+                            # Offer download as fallback if email fails
+                            st.download_button(
+                                label="📥 Download PDF Report Instead",
+                                data=pdf_buffer,
+                                file_name="HiringPartner_Report.pdf",
+                                mime="application/pdf"
+                            )
+                    else:
+                        st.warning("⚠ No email address found in candidate info.")
+        
+        with col2:
+            if st.button("📨 Send Job Listings by Email"):
+                with st.spinner("Formatting and sending job listings..."):
+                    recipient = st.session_state.candidate_info.get("Email")
+                    if recipient:
+                        candidate_name = st.session_state.candidate_info.get("Full Name", "Candidate")
+                        position = st.session_state.candidate_info.get("Position", "Your Desired Position")
+                        location = st.session_state.candidate_info.get("Location", "Your Location")
+                        
+                        if st.session_state.job_recommendations:
+                            email_sent = send_jobs_email(
+                                recipient, 
+                                candidate_name,
+                                st.session_state.job_recommendations,
+                                position,
+                                location
+                            )
+                            if email_sent:
+                                st.success(f"📧 Job listings sent to {recipient}")
+                            else:
+                                st.error("❌ Failed to send job listings email.")
+                        else:
+                            st.warning("⚠ No job recommendations to send.")
+                    else:
+                        st.warning("⚠ No email address found in candidate info.")
 
-            recipient = st.session_state.candidate_info.get("Email")
-            if recipient:
-                email_sent = send_email_with_pdf(recipient, pdf_buffer)
-                if email_sent:
-                    st.success(f"📧 Report sent to {recipient}")
-                else:
-                    st.error("❌ Failed to send email. Check logs or SMTP setup.")
-            else:
-                st.warning("⚠ No email address found in candidate info.")
+# Add automated testing toggle in sidebar
+with st.sidebar:
+    st.subheader("Debug & Testing")
+    if st.button("🧪 Test Email Functions"):
+        test_success, test_details = test_email_functions()
+        if test_success:
+            st.success("✅ All email functions passed simulation tests")
+        else:
+            st.error("❌ Some email tests failed")
+        
+        # Show test details in an expander
+        with st.expander("Test Results"):
+            for result in test_details:
+                st.write(f"**{result['type']}** to {result['recipient']}: {result['status']} ({result['timestamp']})")
